@@ -1,0 +1,185 @@
+# GradGuide Jobs 🎓
+
+A job discovery tool for **international students**: part-time/casual jobs (cafés, retail, delivery, tutoring), full-time roles and internships, with three features built around the problems students abroad actually face.
+
+> 🎥 **Video walkthrough:** _add your Loom / YouTube (unlisted) link here_
+
+---
+
+## Table of contents
+1. [Features](#features)
+2. [Tech stack](#tech-stack)
+3. [Architecture](#architecture)
+4. [Getting started](#getting-started)
+5. [About the data (demo vs. real)](#about-the-data-demo-vs-real)
+6. [How the scraper works](#how-the-scraper-works)
+7. [The 3 original features and rationale](#the-3-original-features-and-rationale)
+8. [API](#api)
+9. [Project structure](#project-structure)
+10. [Testing](#testing)
+11. [Limitations and next steps](#limitations-and-next-steps)
+
+---
+
+## Features
+
+**Core**
+- Searchable, filterable listings: keyword, job type (part-time/casual, full-time, internship), category, location, minimum hourly pay, sort by newest / pay / trust.
+- Each listing shows **title, employer, location, pay, job type, posted date**, plus hours per week when stated.
+- Everyday jobs are first-class: hospitality, retail, delivery, tutoring and campus jobs.
+- Cross-site duplicates are merged into one card ("Also on N other sites").
+
+**Original features**
+1. 🛂 **Visa work-hour guard**
+2. 🛡️ **Employer trust signals** (scam and red-flag detection)
+3. 📋 **Application tracker with follow-up reminders**
+
+## Tech stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| Scraper | Python, `requests`, `BeautifulSoup4`, `lxml`, `PyYAML` | Own code: fetch, parse HTML, structure data. No job APIs, no AI scraping services |
+| Database | SQLite | Zero setup; upsert by listing URL |
+| Backend | Flask | Small JSON API; filters and sorting done in SQL |
+| Frontend | HTML, CSS, vanilla JS | No build step; fast; works on mobile; dark-mode aware |
+| Client storage | `localStorage` | Tracker and visa choice stay on the user's device (no account needed) |
+| Tests | `pytest` | Parser and enrichment tests on saved HTML fixtures |
+
+## Architecture
+
+```
+ sources.yaml ──► Fetcher ──► parse.py ──► enrich.py ──► SQLite ──► Flask API ──► Browser UI
+ (sites to scrape) robots.txt   JSON-LD /    type, pay,     upsert     /api/jobs     filters, visa guard,
+                   rate limit   CSS selectors hours, trust  by URL     dedupe        trust badges, tracker
+```
+
+## Getting started
+
+**Requirements:** Python 3.10+
+
+```bash
+# 1. clone and enter the project
+git clone <your-repo-url> && cd gradguide-jobs
+
+# 2. create a virtual environment
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+# 3. install dependencies
+pip install -r requirements.txt
+
+# 4. run the app
+python app.py
+```
+
+Open **http://127.0.0.1:5000**.
+
+### Optional commands
+```bash
+python -m scraper.run             # scrape the real sites listed in sources.yaml
+python -m scraper.run --fixtures  # load tiny offline test pages
+python seed_demo.py               # (re)load the 50 sample vacancies
+python seed_demo.py --clear       # remove the sample vacancies
+python -m pytest                  # run tests
+```
+
+## About the data (demo vs. real)
+
+- On the **first run with an empty database, the app automatically loads 50 sample vacancies** (`seed_demo.py`) so the UI is never blank. They span Australia, UK, Canada, USA, New Zealand and Ireland, include 34 part-time/casual, 9 full-time and 7 internships, 3 deliberately suspicious listings, and 7 jobs repeated across multiple fake boards to show duplicate handling.
+- Sample listings have a source starting with `demo-` and link to `demo.test` (not real pages).
+- **Real listings** come from the scraper: add real sites to `sources.yaml`, run `python -m scraper.run`, and they appear alongside (or, after `--clear`, instead of) the samples.
+
+## How the scraper works
+
+The scraper is written from scratch: no job-board APIs and no AI/LLM extraction services.
+
+1. **Fetcher** (`scraper/fetch.py`): checks `robots.txt`, waits 2 s between requests, retries with backoff, and identifies itself with a clear User-Agent.
+2. **Two parsing strategies** (`scraper/parse.py`), selected per source in `sources.yaml`:
+   - `jsonld`: many job pages embed a schema.org `JobPosting` in `<script type="application/ld+json">`. This is robust to redesigns. The scraper follows job links from a list page (via a CSS selector) and reads each one.
+   - `css`: for pages without structured data, the item, title, link, location and pay selectors are configured in YAML (`selector@attr` reads an attribute).
+3. **Enrichment** (`scraper/enrich.py`), using transparent regex rules:
+   - job type (part-time/casual, full-time, internship) and category
+   - pay normalised to **$/hour** (from hourly, weekly or annual figures)
+   - hours per week ("12-15 hours per week")
+   - scam/red-flag patterns and student-friendly wording
+4. **Storage** (`db.py`): upsert keyed on URL, so re-running updates rather than duplicates.
+
+**Design choices**
+- Config-driven sources: adding a site means editing YAML, not code.
+- JSON-LD first: it is a published standard and more stable than layout selectors.
+- `requests` over a headless browser: simpler and faster; trade-off is that JavaScript-rendered pages need another approach (their embedded JSON or Playwright).
+- Rules instead of ML: results are explainable and testable.
+
+### Adding a source
+1. Open the site → *View Page Source*.
+2. If it contains `application/ld+json` with `"@type":"JobPosting"`, use `kind: jsonld` and set `link_selector`.
+3. Otherwise find the repeating listing element and use `kind: css` with field selectors.
+4. Read the site's `robots.txt` and terms of use first.
+
+```yaml
+sources:
+  - name: Example local job board
+    kind: jsonld
+    url: https://example.com/jobs/part-time
+    link_selector: "a.job-link"
+    max_jobs: 40
+  - name: Example career page
+    kind: css
+    url: https://example.com/careers
+    employer: Example Co
+    item: "div.posting"
+    fields: {title: "h5", link: "a@href", location: ".location", type: ".commitment"}
+```
+
+## The 3 original features and rationale
+
+### 1. 🛂 Visa work-hour guard
+**Problem:** Student visas limit weekly working hours (for example Australia 48 h/fortnight, UK/NZ/Ireland 20 h/week, Canada 24 h/week off-campus, US F-1 on-campus only). Breaking the limit can put a visa at risk, yet job ads rarely mention it, and students juggle several casual jobs.
+**Solution:** Choose your study country. Every listing shows ✓ *fits* or ⚠ *would exceed* using the job's hours plus the hours of offers you've already accepted, with a live budget bar. If hours aren't stated, it says *confirm before accepting* instead of assuming it's fine.
+**Note:** Limits are simplified; always verify with the official government/university source.
+
+### 2. 🛡️ Employer trust signals
+**Problem:** Newcomers don't know local norms (typical pay, how hiring works) and are common targets for fake jobs: pay-to-start fees, chat-app-only contact, requests for passport or bank details, "$500/day, no experience".
+**Solution:** Every listing gets a 0-100 trust score with visible reasons (⚠ red flags, ✓ student-friendly wording, ℹ pay not listed). Suspicious listings are hidden by default and can be revealed.
+
+### 3. 📋 Application tracker with follow-up reminders
+**Problem:** Students apply to many casual jobs quickly, lose track of where they applied, and miss follow-ups, which are often what leads to a callback.
+**Solution:** Save a job and move it through *saved → applied → interview → offer → rejected*. Marking *applied* schedules a 7-day follow-up and a reminder banner appears when due. Data stays in the browser. Accepted offers feed back into the visa guard's hours budget.
+
+## API
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/jobs` | List jobs (max 200, duplicates merged). Query params: `q`, `type`, `category`, `location`, `min_pay`, `student_friendly=1`, `hide_risky=1`, `sort=newest\|pay\|trust` |
+| `GET /api/meta` | Listing count, sources, last scrape time |
+
+## Project structure
+
+```
+gradguide-jobs/
+├── app.py              # Flask app and JSON API (auto-seeds sample data on first run)
+├── db.py               # SQLite schema and upsert
+├── seed_demo.py        # 50 sample vacancies (with duplicates)
+├── sources.yaml        # sites for the scraper
+├── requirements.txt
+├── scraper/
+│   ├── fetch.py        # polite HTTP fetcher
+│   ├── parse.py        # JSON-LD and CSS-selector parsers
+│   ├── enrich.py       # type, pay, hours, trust flags
+│   └── run.py          # scraper CLI
+├── templates/index.html  # UI (filters, visa guard, tracker)
+└── tests/              # pytest tests + HTML fixtures
+```
+
+## Testing
+
+```bash
+python -m pytest
+```
+Covers JSON-LD parsing, CSS-selector parsing, pay/hours extraction, job classification and scam-flag detection using saved HTML fixtures.
+
+## Limitations and next steps
+- No JavaScript rendering and no multi-page crawling yet.
+- Text heuristics can misclassify unusual wording.
+- Visa limits are simplified and need regular review.
+- **Next:** commute/campus proximity matching, a Playwright adapter for JS-heavy sites, email reminders, scheduled scraping (cron), language-comfort filters.
