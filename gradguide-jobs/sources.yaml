@@ -1,0 +1,17 @@
+# Add REAL sites here. Open each in your browser first, "View Source", and confirm the selectors.
+# Always check the site's robots.txt and terms. Two scraper strategies:
+#   kind: jsonld -> follow links on a list page, read schema.org JobPosting JSON-LD on each detail page
+#   kind: css    -> read listings straight off the list page using CSS selectors ("selector@attr" for attributes)
+sources:
+  - name: Example Lever career page        # Lever-hosted boards share one HTML structure (verify!)
+    kind: css
+    url: https://jobs.lever.co/REPLACE_COMPANY
+    employer: REPLACE_COMPANY
+    item: "div.posting"
+    fields: {title: "h5", link: "a.posting-title@href", location: "span.location", type: "span.commitment"}
+
+  - name: Example local job board
+    kind: jsonld
+    url: https://REPLACE-JOB-BOARD.example/jobs/part-time
+    link_selector: "a.job-link"             # CSS selector for links to individual job pages
+    max_jobs: 40

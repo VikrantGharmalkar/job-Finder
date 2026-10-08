@@ -1,0 +1,116 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GradGuide Jobs</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--ink:#1c2230;--mute:#667085;--brand:#4f46e5;--ok:#067647;--warn:#b54708;--bad:#b42318;--line:#e4e7ec}
+@media(prefers-color-scheme:dark){:root{--bg:#10131a;--card:#181c26;--ink:#e8eaf0;--mute:#98a2b3;--line:#2a3040}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{padding:18px 20px;border-bottom:1px solid var(--line);background:var(--card)}h1{margin:0;font-size:20px}
+.sub{color:var(--mute);font-size:13px}main{max-width:1000px;margin:0 auto;padding:16px}
+.bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:10px}
+input,select,button{padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit}
+button{cursor:pointer}button.p{background:var(--brand);color:#fff;border:0}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+.tabs button{margin-right:6px}.tabs .on{background:var(--brand);color:#fff}
+.job{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px}
+.job h3{margin:0 0 2px;font-size:16px}.meta{color:var(--mute);font-size:13px}
+.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);margin:6px 6px 0 0}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.meter{height:8px;background:var(--line);border-radius:9px;overflow:hidden}.meter i{display:block;height:100%;background:var(--brand)}
+.hidden{display:none}a{color:var(--brand)}
+</style></head><body>
+<header><h1>GradGuide Jobs</h1><div class="sub" id="meta">Loading…</div></header>
+<main>
+<div class="panel"><b>🛂 Work-hour guard</b> <span class="sub">— pick your study country; every listing shows whether it fits your visa limit.</span>
+ <div class="row"><select id="country"><option value="">Select country…</option></select>
+ <span id="limitnote" class="sub"></span></div>
+ <div id="budget" class="hidden"><div class="meter"><i id="bar" style="width:0"></i></div><div class="sub" id="budgettxt"></div></div>
+ <div class="sub">Limits are simplified and change — always confirm with your university / government site.</div></div>
+<div id="alerts"></div>
+<div class="tabs"><button id="t1" class="on">Find jobs</button><button id="t2">My applications (<span id="cnt">0</span>)</button></div><br>
+<section id="find">
+ <div class="bar">
+  <input id="q" placeholder="Search: barista, tutor, intern…">
+  <select id="type"><option value="">All types</option><option value="part-time">Part-time / casual</option><option value="full-time">Full-time</option><option value="internship">Internship</option></select>
+  <select id="category"><option value="">All categories</option><option>hospitality</option><option>retail</option><option>delivery</option><option>tutoring</option><option>tech</option><option>campus</option><option>other</option></select>
+  <input id="location" placeholder="Location / suburb"><input id="min_pay" type="number" placeholder="Min $/hr">
+  <select id="sort"><option value="newest">Newest</option><option value="pay">Highest pay</option><option value="trust">Most trusted</option></select>
+ </div>
+ <label><input type="checkbox" id="sf"> Student-friendly wording</label> &nbsp;
+ <label><input type="checkbox" id="risky" checked> Hide suspicious listings</label>
+ <div id="list" style="margin-top:12px"></div>
+</section>
+<section id="track" class="hidden"><div id="tlist"></div></section>
+</main>
+<script>
+const LIMITS={AU:[24,"Australia: 48h/fortnight (~24h/week)"],UK:[20,"UK: 20h/week in term (degree level)"],CA:[24,"Canada: 24h/week off-campus"],US:[20,"US F-1: 20h/week on-campus. Off-campus needs authorisation (CPT/OPT)"],NZ:[20,"New Zealand: 20h/week"],IE:[20,"Ireland: 20h/week in term"]};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const store=(k,v)=>{try{if(v===undefined)return JSON.parse(localStorage.getItem(k)||"null");localStorage.setItem(k,JSON.stringify(v))}catch(e){return null}};
+let tracker=store("tracker")||{}, country=store("country")||"", jobs=[];
+const STATUS=["saved","applied","interview","offer","rejected"];
+
+for(const k in LIMITS){$("country").add(new Option(k+" — "+LIMITS[k][1].split(":")[0],k))}
+$("country").value=country;
+
+// ---- Feature 1: visa work-hour guard
+const committed=()=>Object.values(tracker).filter(t=>t.status==="offer").reduce((s,t)=>s+(t.job.hours_per_week||0),0);
+function visaBadge(j){
+  if(!country)return"";const lim=LIMITS[country][0];
+  if(j.job_type==="internship"&&!j.hours_per_week)return'<span class="tag warn">Check hours with employer</span>';
+  if(!j.hours_per_week)return'<span class="tag warn">Hours not stated — confirm before accepting</span>';
+  const tot=committed()+j.hours_per_week;
+  return tot<=lim?`<span class="tag ok">✓ Fits visa (${tot}/${lim} h/wk)</span>`:`<span class="tag bad">⚠ Would exceed ${lim} h/wk (${tot})</span>`;
+}
+function renderBudget(){
+  $("budget").classList.toggle("hidden",!country);if(!country){$("limitnote").textContent="";return}
+  const lim=LIMITS[country][0],c=committed();$("limitnote").textContent=LIMITS[country][1];
+  $("bar").style.width=Math.min(100,c/lim*100)+"%";$("budgettxt").textContent=`Accepted offers use ${c} of ${lim} hours/week`;
+}
+$("country").onchange=e=>{country=e.target.value;store("country",country);renderBudget();render()};
+
+// ---- Feature 2: trust signals (computed server side; shown here)
+const trustTag=j=>{const c=j.trust_score>=80?"ok":j.trust_score>=60?"warn":"bad";return`<span class="tag ${c}">Trust ${j.trust_score}/100</span>`};
+
+// ---- Feature 3: application tracker + follow-up reminders
+function track(id,status){
+  const j=jobs.find(x=>x.id===id)||tracker[id]?.job;const t=tracker[id]||{job:j,note:""};t.status=status;
+  if(status==="applied"){t.appliedOn=new Date().toISOString().slice(0,10);const d=new Date();d.setDate(d.getDate()+7);t.followUp=d.toISOString().slice(0,10)}
+  tracker[id]=t;store("tracker",tracker);refresh();
+}
+function untrack(id){delete tracker[id];store("tracker",tracker);refresh()}
+function alerts(){
+  const today=new Date().toISOString().slice(0,10);
+  const due=Object.values(tracker).filter(t=>t.status==="applied"&&t.followUp<=today);
+  $("alerts").innerHTML=due.map(t=>`<div class="panel warn">⏰ Follow up with <b>${esc(t.job.employer)}</b> about "${esc(t.job.title)}" (applied ${t.appliedOn}).</div>`).join("");
+}
+function renderTracker(){
+  const items=Object.entries(tracker);$("cnt").textContent=items.length;
+  $("tlist").innerHTML=items.length?items.map(([id,t])=>`<div class="job"><h3>${esc(t.job.title)}</h3><div class="meta">${esc(t.job.employer)} · ${esc(t.job.location||"")}</div>
+  <div class="row"><select onchange="track(${id},this.value)">${STATUS.map(s=>`<option ${s===t.status?"selected":""}>${s}</option>`).join("")}</select>
+  ${t.followUp&&t.status==="applied"?`<span class="tag">Follow up by ${t.followUp}</span>`:""}
+  <a href="${esc(t.job.url)}" target="_blank" rel="noopener">Open listing</a><button onclick="untrack(${id})">Remove</button></div></div>`).join(""):'<div class="sub">Nothing tracked yet. Save a job to start.</div>';
+}
+
+function card(j){
+  const pay=j.pay_text||"Pay not listed",age=j.posted_date||"date n/a";
+  return`<div class="job"><h3>${esc(j.title)}</h3><div class="meta">${esc(j.employer)} · ${esc(j.location||"Location n/a")} · ${esc(pay)} · Posted ${esc(age)}</div>
+  <span class="tag">${esc(j.job_type)}</span><span class="tag">${esc(j.category)}</span>${j.hours_per_week?`<span class="tag">${j.hours_per_week} h/wk</span>`:""}${trustTag(j)}${visaBadge(j)}${j.also_on&&j.also_on.length?`<span class="tag">Also on ${j.also_on.length} other site${j.also_on.length>1?"s":""}</span>`:""}
+  ${j.flags.map(f=>`<span class="tag ${f.startsWith("⚠")?"bad":f.startsWith("✓")?"ok":""}">${esc(f)}</span>`).join("")}
+  <p class="meta">${esc(j.description)}</p>
+  <div class="row"><a href="${esc(j.url)}" target="_blank" rel="noopener">View original ↗</a>
+  <button class="p" onclick="track(${j.id},'saved')" ${tracker[j.id]?"disabled":""}>${tracker[j.id]?"Tracked":"Save"}</button>
+  <button onclick="track(${j.id},'applied')">I applied</button></div></div>`;
+}
+const render=()=>{$("list").innerHTML=jobs.length?jobs.map(card).join(""):'<div class="sub">No jobs match. Try fewer filters, or run the scraper.</div>'};
+async function load(){
+  const p=new URLSearchParams({q:$("q").value,type:$("type").value,category:$("category").value,location:$("location").value,min_pay:$("min_pay").value,sort:$("sort").value,student_friendly:$("sf").checked?1:0,hide_risky:$("risky").checked?1:0});
+  jobs=await (await fetch("/api/jobs?"+p)).json();render();
+}
+const refresh=()=>{renderBudget();alerts();renderTracker();render()};
+let tm;["q","location","min_pay"].forEach(i=>$(i).oninput=()=>{clearTimeout(tm);tm=setTimeout(load,250)});
+["type","category","sort","sf","risky"].forEach(i=>$(i).onchange=load);
+$("t1").onclick=()=>{$("find").classList.remove("hidden");$("track").classList.add("hidden");$("t1").classList.add("on");$("t2").classList.remove("on")};
+$("t2").onclick=()=>{$("track").classList.remove("hidden");$("find").classList.add("hidden");$("t2").classList.add("on");$("t1").classList.remove("on")};
+fetch("/api/meta").then(r=>r.json()).then(m=>$("meta").textContent=`${m.count} listings · ${m.sources.length} sources · last scraped ${m.last_scraped||"never"}`);
+load().then(refresh);
+</script></body></html>
